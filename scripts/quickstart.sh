@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ── OpenJarvis Quickstart ─────────────────────────────────────────────
-# One-command setup: installs deps, starts Ollama + model, launches
-# the backend API server and frontend, then opens the browser.
-#
-# Usage:
-#   git clone https://github.com/open-jarvis/OpenJarvis.git
-#   cd OpenJarvis
-#   ./scripts/quickstart.sh
+# ── OpenJarvis Quickstart (hardened) ─────────────────────────────────
+# SECURITY: Install uv and Ollama manually BEFORE running this script.
+#   - uv:     https://docs.astral.sh/uv/getting-started/installation/
+#   - Ollama: https://ollama.com/download
+# This script will refuse to auto-install them.
 # ──────────────────────────────────────────────────────────────────────
 
 BLUE='\033[0;34m'
@@ -35,18 +32,17 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# ── Navigate to repo root ────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
 echo -e "${BOLD}"
-echo "  ┌──────────────────────────────────┐"
-echo "  │       OpenJarvis Quickstart      │"
-echo "  └──────────────────────────────────┘"
+echo "  ┌───────────────────────────┐"
+echo "  │   OpenJarvis Quickstart   │"
+echo "  └───────────────────────────┘"
 echo -e "${NC}"
 
-# ── 1. Check Python ──────────────────────────────────────────────────
+# ── Python ────────────────────────────────────────────────────────────
 info "Checking Python..."
 if command -v python3 &>/dev/null; then
   PY_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
@@ -61,18 +57,15 @@ else
   fail "Python 3 not found. Install from https://python.org"
 fi
 
-# ── 2. Check / install uv ───────────────────────────────────────────
+# ── uv (no auto-install) ──────────────────────────────────────────────
 info "Checking uv..."
 if command -v uv &>/dev/null; then
   ok "uv $(uv --version 2>/dev/null | head -1)"
 else
-  warn "uv not found — installing..."
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  export PATH="$HOME/.local/bin:$PATH"
-  ok "uv installed"
+  fail "uv not found. Install manually: https://docs.astral.sh/uv/getting-started/installation/"
 fi
 
-# ── 3. Check Node.js ────────────────────────────────────────────────
+# ── Node.js ───────────────────────────────────────────────────────────
 info "Checking Node.js..."
 if command -v node &>/dev/null; then
   NODE_VERSION=$(node --version)
@@ -86,35 +79,15 @@ else
   fail "Node.js not found. Install from https://nodejs.org"
 fi
 
-# ── 4. Check / install Ollama ────────────────────────────────────────
+# ── Ollama (no auto-install) ──────────────────────────────────────────
 info "Checking Ollama..."
 if command -v ollama &>/dev/null; then
   ok "Ollama found"
 else
-  warn "Ollama not found — installing..."
-  case "$(uname -s)" in
-    Darwin)
-      if command -v brew &>/dev/null; then
-        brew install ollama
-      else
-        echo "  Download Ollama from https://ollama.com/download"
-        echo "  Then re-run this script."
-        exit 1
-      fi
-      ;;
-    Linux)
-      curl -fsSL https://ollama.com/install.sh | sh
-      ;;
-    *)
-      echo "  Download Ollama from https://ollama.com/download"
-      echo "  Then re-run this script."
-      exit 1
-      ;;
-  esac
-  ok "Ollama installed"
+  fail "Ollama not found. Install manually from https://ollama.com/download"
 fi
 
-# ── 5. Start Ollama if not running ───────────────────────────────────
+# ── Start Ollama if not running ───────────────────────────────────────
 info "Checking if Ollama is running..."
 if curl -sf http://localhost:11434/api/tags &>/dev/null; then
   ok "Ollama is running"
@@ -130,7 +103,7 @@ else
   fi
 fi
 
-# ── 6. Pull a starter model ─────────────────────────────────────────
+# ── Pull starter model ────────────────────────────────────────────────
 MODEL="${OPENJARVIS_MODEL:-qwen3:0.6b}"
 info "Ensuring model '$MODEL' is available..."
 if ollama list 2>/dev/null | grep -q "$MODEL"; then
@@ -141,42 +114,41 @@ else
   ok "Model '$MODEL' ready"
 fi
 
-# ── 7. Install Python dependencies ──────────────────────────────────
+# ── Python deps ───────────────────────────────────────────────────────
 info "Installing Python dependencies..."
-uv sync --extra server --quiet 2>/dev/null || uv sync --extra server
+uv sync --extra server
 ok "Python dependencies installed"
 
-# ── 7b. Build Rust extension ──────────────────────────────────────
+# ── Rust extension ────────────────────────────────────────────────────
+# Audit rust/crates/openjarvis-python/ before trusting this step.
 info "Building Rust extension..."
-uv run maturin develop -m rust/crates/openjarvis-python/Cargo.toml --quiet 2>/dev/null \
-  || uv run maturin develop -m rust/crates/openjarvis-python/Cargo.toml
+uv run maturin develop -m rust/crates/openjarvis-python/Cargo.toml
 ok "Rust extension built"
 
-# ── 8. Install frontend dependencies ────────────────────────────────
-info "Installing frontend dependencies..."
-(cd frontend && npm install --silent 2>/dev/null || npm install)
+# ── Frontend deps (strict: use lockfile) ─────────────────────────────
+info "Installing frontend dependencies (strict mode)..."
+(cd frontend && npm ci)
 ok "Frontend dependencies installed"
 
-# ── 9. Start backend ────────────────────────────────────────────────
-info "Starting backend API server on port 8000..."
-uv run jarvis serve --port 8000 &>/dev/null &
+# ── Backend (localhost only) ──────────────────────────────────────────
+info "Starting backend API server on 127.0.0.1:8000..."
+uv run jarvis serve --host 127.0.0.1 --port 8000 &>/dev/null &
 CLEANUP_PIDS+=($!)
 sleep 3
 
-if curl -sf http://localhost:8000/health &>/dev/null; then
-  ok "Backend running at http://localhost:8000"
+if curl -sf http://127.0.0.1:8000/health &>/dev/null; then
+  ok "Backend running at http://127.0.0.1:8000"
 else
   warn "Backend may still be starting..."
 fi
 
-# ── 10. Start frontend ──────────────────────────────────────────────
+# ── Frontend ──────────────────────────────────────────────────────────
 info "Starting frontend dev server on port 5173..."
 (cd frontend && npm run dev) &>/dev/null &
 CLEANUP_PIDS+=($!)
 sleep 3
 ok "Frontend running at http://localhost:5173"
 
-# ── 11. Open browser ────────────────────────────────────────────────
 URL="http://localhost:5173"
 info "Opening $URL ..."
 case "$(uname -s)" in
@@ -189,7 +161,7 @@ echo ""
 echo -e "${GREEN}${BOLD}  OpenJarvis is running!${NC}"
 echo ""
 echo "  Chat UI:  http://localhost:5173"
-echo "  API:      http://localhost:8000"
+echo "  API:      http://127.0.0.1:8000"
 echo "  Model:    $MODEL"
 echo ""
 echo "  Press Ctrl+C to stop all services."
